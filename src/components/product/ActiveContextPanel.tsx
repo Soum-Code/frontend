@@ -33,6 +33,7 @@ interface ActiveContextPanelProps {
   selectedTrace?: Trace;
   selectedSpan?: Span;
   selectedIncident?: Incident;
+  onResolveIncident?: (incidentId: string) => void;
   onClearSelection: () => void;
   onSelectAgent: (agent: Agent) => void;
   onSelectTrace: (trace: Trace) => void;
@@ -51,6 +52,7 @@ export const ActiveContextPanel: React.FC<ActiveContextPanelProps> = ({
   selectedTrace,
   selectedSpan,
   selectedIncident,
+  onResolveIncident,
   onClearSelection,
   onCurateToDataset,
   isOpen,
@@ -59,7 +61,15 @@ export const ActiveContextPanel: React.FC<ActiveContextPanelProps> = ({
   onTogglePin
 }) => {
   const [copied, setCopied] = useState(false);
+  const [copiedTraceId, setCopiedTraceId] = useState(false);
   const [curatedSuccess, setCuratedSuccess] = useState(false);
+
+  const handleCopyTraceIdOnly = (e: React.MouseEvent, traceId: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(traceId);
+    setCopiedTraceId(true);
+    setTimeout(() => setCopiedTraceId(false), 2000);
+  };
 
   // Derive effective agent info from trace if selectedAgent is not explicitly provided
   const effectiveAgentName = selectedAgent?.name || selectedTrace?.agentName;
@@ -320,6 +330,50 @@ export const ActiveContextPanel: React.FC<ActiveContextPanelProps> = ({
               {selectedTrace && (
                 <div className="ios-liquid-card border-glow-subtle rounded-xl p-3.5 border border-white/[0.12] space-y-2.5 relative group overflow-hidden">
                   <div className="absolute inset-x-0 top-0 h-[1.5px] apple-liquid-specular pointer-events-none opacity-60" />
+                  
+                  {/* Inline Hierarchical Breadcrumbs in Header: Agent -> Trace -> Span */}
+                  <nav
+                    aria-label={`Active context path for ${selectedTrace.id}`}
+                    className="flex items-center space-x-1 text-[9px] font-mono min-w-0 overflow-hidden pb-1 border-b border-white/[0.08]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectTab('agents')}
+                      className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-white/[0.05] hover:bg-emerald-500/20 text-neutral-300 hover:text-emerald-300 border border-white/[0.08] hover:border-emerald-500/40 transition-all shrink-0 max-w-[80px] truncate"
+                      title={`Agent: ${selectedTrace.agentName}`}
+                    >
+                      <Bot className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                      <span className="truncate">{selectedTrace.agentName.split(' ')[0]}</span>
+                    </button>
+
+                    <ChevronRight className="w-2.5 h-2.5 text-neutral-500 shrink-0" />
+
+                    <button
+                      type="button"
+                      onClick={() => onSelectTab('traces')}
+                      className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shrink-0 max-w-[80px] truncate font-medium"
+                      title={`Trace: ${selectedTrace.id}`}
+                    >
+                      <Activity className="w-2.5 h-2.5 text-cyan-400 shrink-0" />
+                      <span className="truncate">{selectedTrace.id.replace('trace-', '')}</span>
+                    </button>
+
+                    {selectedSpan && (
+                      <>
+                        <ChevronRight className="w-2.5 h-2.5 text-neutral-500 shrink-0" />
+                        <button
+                          type="button"
+                          onClick={() => onSelectTab('traces')}
+                          className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 hover:bg-purple-500/25 transition-all shrink-0 min-w-0 max-w-[85px] truncate"
+                          title={`Span: ${selectedSpan.name}`}
+                        >
+                          <Flame className="w-2.5 h-2.5 text-purple-400 shrink-0" />
+                          <span className="truncate">{selectedSpan.name}</span>
+                        </button>
+                      </>
+                    )}
+                  </nav>
+
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-sans font-medium uppercase tracking-wider text-cyan-400 flex items-center space-x-1.5 liquid-card-label">
                       <Activity className="w-3.5 h-3.5" />
@@ -337,7 +391,31 @@ export const ActiveContextPanel: React.FC<ActiveContextPanelProps> = ({
 
                   <div className="space-y-1">
                     <div className="text-xs font-mono tabular-nums font-bold text-white tracking-wider flex items-center justify-between">
-                      <span>{selectedTrace.id}</span>
+                      <div className="flex items-center space-x-1.5">
+                        <span>{selectedTrace.id}</span>
+                        <button
+                          onClick={(e) => handleCopyTraceIdOnly(e, selectedTrace.id)}
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono flex items-center space-x-1 transition-all border ${
+                            copiedTraceId
+                              ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300'
+                              : 'bg-white/[0.06] border-white/[0.12] text-neutral-300 hover:text-white hover:bg-white/[0.14]'
+                          }`}
+                          title="Copy Trace ID"
+                          aria-label={`Copy Trace ID ${selectedTrace.id}`}
+                        >
+                          {copiedTraceId ? (
+                            <>
+                              <Check className="w-2.5 h-2.5 text-emerald-300" />
+                              <span className="text-[9px] text-emerald-300">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-2.5 h-2.5" />
+                              <span className="text-[9px]">Copy ID</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                       <span
                         className={`text-[9px] uppercase px-1.5 py-0.5 rounded border ${
                           selectedTrace.status === 'error'
@@ -482,6 +560,18 @@ export const ActiveContextPanel: React.FC<ActiveContextPanelProps> = ({
                       {selectedIncident.summary}
                     </p>
                   </div>
+
+                  {onResolveIncident && (
+                    <button
+                      onClick={() => onResolveIncident(selectedIncident.id)}
+                      className="w-full mt-2 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 text-[11px] font-mono font-medium flex items-center justify-center space-x-1.5 transition-all active:scale-98"
+                      title="Mark selected incident as resolved (⌘⇧R)"
+                    >
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Mark Resolved</span>
+                      <kbd className="px-1.5 py-0.5 rounded text-[9px] bg-black/40 text-emerald-300/90 border border-emerald-500/30 ml-1">⌘⇧R</kbd>
+                    </button>
+                  )}
                 </div>
               )}
             </>

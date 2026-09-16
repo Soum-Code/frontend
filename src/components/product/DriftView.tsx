@@ -143,7 +143,7 @@ export const DriftView: React.FC<DriftViewProps> = ({
                   <div
                     key={pt.id}
                     onClick={() => onNavigateToTrace(pt.traceId)}
-                    className="p-2.5 rounded-lg bg-neutral-950/70 border border-neutral-800/80 hover:border-neutral-600 hover:bg-neutral-900 cursor-pointer transition-colors flex items-center justify-between"
+                    className="p-2.5 rounded-lg bg-neutral-950/70 border border-neutral-800/80 hover:border-neutral-600 hover:bg-neutral-900 cursor-pointer transition-colors flex items-center justify-between anime-tab-row"
                   >
                     <div>
                       <div className="font-semibold text-neutral-200">{pt.label}</div>

@@ -27,12 +27,17 @@ export const ExperimentsView: React.FC<ExperimentsViewProps> = ({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-mono font-semibold text-white uppercase tracking-wider flex items-center space-x-2">
-            <FlaskConical className="w-5 h-5 text-neutral-300" />
-            <span>Candidate Evaluation & Experiments</span>
-          </h2>
+          <div className="flex items-center space-x-2">
+            <h2 className="text-lg font-mono font-semibold text-white uppercase tracking-wider flex items-center space-x-2">
+              <FlaskConical className="w-5 h-5 text-neutral-300" />
+              <span>Candidate Evaluation &amp; Experiments</span>
+            </h2>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-400/10 border border-amber-400/30 text-amber-300 uppercase">
+              MLflow Matrix + CI/CD Gate
+            </span>
+          </div>
           <p className="text-xs font-mono text-neutral-400 mt-1">
-            Braintrust & Langfuse loop: Test candidate models & hardened system prompts against golden benchmark datasets
+            Deterministic Regression Loop: Test prompt candidates &amp; model weights against versioned golden datasets using local CPU DeBERTa &amp; MiniLM without calling an LLM
           </p>
         </div>
 
@@ -57,7 +62,7 @@ export const ExperimentsView: React.FC<ExperimentsViewProps> = ({
               <div
                 key={exp.id}
                 onClick={() => setSelectedExp(exp)}
-                className={`p-4 rounded-xl border cursor-pointer transition-all space-y-2 ${
+                className={`p-4 rounded-xl border cursor-pointer transition-all space-y-2 anime-tab-row ${
                   isSelected
                     ? 'bg-neutral-850 border-neutral-500 shadow-md'
                     : 'surface-solid text-neutral-300 hover:bg-neutral-850 surface-hover'
@@ -88,7 +93,7 @@ export const ExperimentsView: React.FC<ExperimentsViewProps> = ({
 
         {/* Right Column: Experiment Comparison Diff Matrix */}
         {selectedExp && (
-          <div className="lg:col-span-7 surface-solid rounded-xl border border-neutral-800 overflow-hidden font-mono text-xs">
+          <div className="lg:col-span-7 surface-solid rounded-xl border border-neutral-800 overflow-hidden font-mono text-xs anime-tab-card">
             {/* Header (Liquid Glass) */}
             <div className="glass-floating px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
               <div>

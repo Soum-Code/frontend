@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { triggerTactileTabClick } from '../../utils/animeTabTransitions';
 import {
   LayoutDashboard,
   Bot,
@@ -14,7 +15,8 @@ import {
   Command,
   ChevronUp,
   MoreHorizontal,
-  Keyboard
+  Keyboard,
+  Gauge
 } from 'lucide-react';
 import { ProductTab } from '../../types';
 
@@ -44,8 +46,9 @@ export const FloatingDock: React.FC<FloatingDockProps> = ({
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'agents', label: 'Agents', icon: Bot },
     { id: 'traces', label: 'Traces', icon: Activity },
-    { id: 'incidents', label: 'Incidents', icon: AlertTriangle, badge: incidentCount, badgeColor: 'bg-rose-500 text-white' },
-    { id: 'drift', label: 'Drift', icon: TrendingDown, badge: driftWarningCount, badgeColor: 'bg-amber-500 text-black' },
+    { id: 'performance', label: 'APM Performance', icon: Gauge },
+    { id: 'incidents', label: 'Incidents', icon: AlertTriangle, badge: incidentCount, badgeColor: 'bg-rose-500 text-white phosphor-rose' },
+    { id: 'drift', label: 'Drift', icon: TrendingDown, badge: driftWarningCount, badgeColor: 'bg-amber-500 text-black phosphor-amber' },
   ];
 
   const secondaryItems: { id: ProductTab; label: string; icon: React.FC<{ className?: string }> }[] = [
@@ -102,7 +105,8 @@ export const FloatingDock: React.FC<FloatingDockProps> = ({
                     whileHover={{ scale: 1.02, x: 2 }}
                     whileTap={{ scale: 0.98 }}
                     transition={{ type: 'spring', stiffness: 500, damping: 28 }}
-                    onClick={() => {
+                    onClick={(e) => {
+                      triggerTactileTabClick(e.currentTarget);
                       onSelectTab(item.id);
                       setShowSecondaryMenu(false);
                     }}
@@ -166,7 +170,8 @@ export const FloatingDock: React.FC<FloatingDockProps> = ({
               whileTap={{ scale: 0.94 }}
               transition={{ type: 'spring', stiffness: 450, damping: 28 }}
               onMouseEnter={() => setHoveredIndex(idx)}
-              onClick={() => {
+              onClick={(e) => {
+                triggerTactileTabClick(e.currentTarget);
                 onSelectTab(item.id);
                 setShowSecondaryMenu(false);
               }}

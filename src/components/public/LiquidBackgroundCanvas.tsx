@@ -41,13 +41,13 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
         };
       } else if (pal === 'chalk') {
         return {
-          baseColor: new THREE.Color(0xf8fafc), // Apple studio ceramic pearl
-          liquidColor1: new THREE.Color(0xf1f5f9), // Translucent ice white
-          liquidColor2: new THREE.Color(0xe2e8f0), // Soft glass frosted tint
-          highlightColor: new THREE.Color(0xffffff), // Pure specular sheen
-          causticColor: new THREE.Color(0x38bdf8), // Faint prismatic refraction
-          contrast: 0.9,
-          darkMix: 0.02,
+          baseColor: new THREE.Color(0xfcfdfd), // Pure alabaster light studio base
+          liquidColor1: new THREE.Color(0xeef2f6), // Soft pearlescent silk wave
+          liquidColor2: new THREE.Color(0xe2e8f0), // Gentle slate-mist contour shadow (soft & light)
+          highlightColor: new THREE.Color(0xffffff), // Crisp titanium white specular gloss crest
+          causticColor: new THREE.Color(0xdbeafe), // Subtle crystalline ice-blue refraction
+          contrast: 1.05,
+          darkMix: 0.22,
         };
       } else {
         // Dark / Obsidian Apple VisionOS glass
@@ -85,13 +85,24 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
       u_palette_mode: { value: palette === 'butter' ? 0.0 : palette === 'chalk' ? 1.0 : 2.0 },
     };
 
+    let cachedRect = container.getBoundingClientRect();
+    const updateBounds = () => {
+      cachedRect = container.getBoundingClientRect();
+    };
+
     const updateSize = () => {
       const w = container.clientWidth || window.innerWidth || 1920;
       const h = container.clientHeight || window.innerHeight || 1080;
       renderer.setSize(w, h);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       uniforms.u_resolution.value.set(w, h);
+      updateBounds();
     };
+
+    // Ensure WebGL canvas DOM element never captures, intercepts, or delays pointer events
+    renderer.domElement.style.pointerEvents = 'none';
+    renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.setAttribute('aria-hidden', 'true');
 
     updateSize();
     container.replaceChildren(renderer.domElement);
@@ -190,17 +201,18 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
         vec2 mouseP = u_mouse;
         mouseP.x *= aspect;
 
-        // Smooth distance and cursor velocity physics
+        // Smooth distance and cursor velocity physics centered precisely at pointer
         float distToMouse = length(p - mouseP);
+        vec2 mouseDir = p - mouseP;
         float mouseSpeedVal = clamp(u_mouse_speed, 0.0, 3.5);
 
-        // Apple Liquid Glass ripple deformation
-        float rippleDecay = exp(-distToMouse * 3.4);
-        float dynamicRipple = sin(distToMouse * 24.0 - u_time * 4.5) * 0.035 * rippleDecay * (1.0 + mouseSpeedVal * 0.8);
+        // Apple Liquid Glass ripple deformation centered exactly on cursor
+        float rippleDecay = exp(-distToMouse * 4.2);
+        float dynamicRipple = sin(distToMouse * 28.0 - u_time * 5.0) * 0.025 * rippleDecay * (0.5 + mouseSpeedVal * 0.8);
         
-        vec2 mouseDir = p - mouseP;
-        vec2 glassWavePush = normalize(mouseDir + 0.0001) * (rippleDecay * 0.14 + dynamicRipple);
-        vec2 glassVortex = vec2(-mouseDir.y, mouseDir.x) * rippleDecay * (u_mouse_velocity.x * 0.6 + 0.08);
+        // Zero static offset: displacement occurs only dynamically with movement
+        vec2 glassWavePush = normalize(mouseDir + 0.0001) * dynamicRipple;
+        vec2 glassVortex = vec2(-mouseDir.y, mouseDir.x) * rippleDecay * (u_mouse_velocity.x * 0.8);
 
         // Multi-tier domain warping for transparent liquid glass transmission
         vec2 q = vec2(0.0);
@@ -259,16 +271,32 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
           col += rippleDecay * vec3(0.09, 0.07, 0.02) * (1.0 + mouseSpeedVal * 1.2);
 
         } else if (u_palette_mode < 1.5) {
-          // --- CHALK PALETTE: Apple Studio Ceramic Liquid Glass ---
-          // Translucent frosted glass with soft chromatic dispersion and pure white bevel highlights
-          float glassSheen = smoothstep(-0.45, 0.65, f);
-          col = mix(u_base_color, u_liquid_color1, glassSheen * 0.45);
-          col = mix(col, u_liquid_color2, smoothstep(0.1, 0.85, r.x) * 0.18);
-          
-          // Pure crystal specular
-          col += totalSpec * 0.65;
-          col += fresnel * vec3(0.06, 0.09, 0.12);
-          col += rippleDecay * 0.05;
+          // --- CHALK PALETTE: Serene Editorial Silk Fluid & Luminous White Glass ---
+          float chalkWave1 = smoothstep(-0.45, 0.65, dispG);
+          float chalkWave2 = smoothstep(-0.35, 0.55, r.x);
+          float waveElevation = f * 0.60 + r.x * 0.40;
+
+          // Transition from pure alabaster to gentle pearl-silk wave
+          col = mix(u_base_color, u_liquid_color1, chalkWave1 * 0.75);
+
+          // Soft, elegant depth (gentle slate mist, no harsh crevices)
+          col = mix(col, u_liquid_color2, chalkWave2 * u_dark_mix);
+
+          // Pure white crest illumination
+          float crestLight = smoothstep(0.1, 0.8, waveElevation);
+          col = mix(col, u_highlight_color, crestLight * 0.55);
+
+          // Gentle crystalline caustic refraction
+          col = mix(col, u_caustic_color, chromaticTear.b * 0.20);
+
+          // Ultra-refined specular lighting
+          col += totalSpec * vec3(1.0, 1.0, 1.0) * 0.70;
+
+          // Luminous water glass ripple from cursor (pure light rings, no dark rings)
+          float rippleWave = sin(length(mouseDir) * 28.0 - u_time * 5.0);
+          float rippleIntensity = rippleDecay * (0.5 + mouseSpeedVal * 0.8);
+          col = mix(col, u_highlight_color, clamp(rippleWave, 0.0, 1.0) * rippleIntensity * 0.6);
+          col = mix(col, u_caustic_color, clamp(-rippleWave, 0.0, 1.0) * rippleIntensity * 0.35);
 
         } else {
           // --- DARK OBSIDIAN PALETTE: Apple VisionOS Space Glass ---
@@ -305,16 +333,32 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
     scene.add(plane);
 
-    // Global Pointer Movement Tracker across the entire viewport
+    // Optimized Pointer Movement Tracker utilizing cached viewport bounds
     const handlePointerMove = (e: PointerEvent) => {
-      const x = e.clientX / window.innerWidth;
-      const y = 1.0 - (e.clientY / window.innerHeight);
+      const w = cachedRect.width || window.innerWidth || 1;
+      const h = cachedRect.height || window.innerHeight || 1;
+      const x = (e.clientX - cachedRect.left) / w;
+      const y = 1.0 - ((e.clientY - cachedRect.top) / h);
 
       mouse.targetX = Math.max(0, Math.min(1, x));
       mouse.targetY = Math.max(0, Math.min(1, y));
     };
 
+    const handlePointerDown = (e: PointerEvent) => {
+      handlePointerMove(e);
+    };
+
+    const handlePointerLeave = () => {
+      // Return gracefully to center coordinates when cursor exits the document
+      mouse.targetX = 0.5;
+      mouse.targetY = 0.5;
+    };
+
     window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    window.addEventListener('pointerdown', handlePointerDown, { passive: true });
+    document.addEventListener('mouseleave', handlePointerLeave, { passive: true });
+    window.addEventListener('resize', updateBounds, { passive: true });
+    window.addEventListener('scroll', updateBounds, { passive: true });
 
     // Resize Observer
     const resizeObserver = new ResizeObserver(() => {
@@ -331,21 +375,28 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
       const delta = clock.getDelta();
       const elapsedTime = clock.getElapsedTime();
 
-      // Mouse Smooth Spring Physics
+      // Mouse Physics: Immediate tracking without artificial lag or delay
       const prevX = mouse.x;
       const prevY = mouse.y;
-      mouse.x += (mouse.targetX - mouse.x) * 0.08;
-      mouse.y += (mouse.targetY - mouse.y) * 0.08;
+      const dx = mouse.targetX - mouse.x;
+      const dy = mouse.targetY - mouse.y;
+      
+      // Highly responsive follow factor (0.85) provides immediate hit-tracking
+      const followFactor = 0.85;
+      mouse.x += dx * followFactor;
+      mouse.y += dy * followFactor;
+      if (Math.abs(dx) < 0.0001) mouse.x = mouse.targetX;
+      if (Math.abs(dy) < 0.0001) mouse.y = mouse.targetY;
 
       mouse.vx = mouse.x - prevX;
       mouse.vy = mouse.y - prevY;
-      mouse.speed = Math.sqrt(mouse.vx * mouse.vx + mouse.vy * mouse.vy) * 20.0;
+      mouse.speed = Math.sqrt(mouse.vx * mouse.vx + mouse.vy * mouse.vy) * 28.0;
 
-      // Update Uniforms
+      // Update Uniforms with exact coordinates
       uniforms.u_time.value = elapsedTime;
       uniforms.u_mouse.value.set(mouse.x, mouse.y);
       uniforms.u_mouse_velocity.value.set(mouse.vx, mouse.vy);
-      uniforms.u_mouse_speed.value = THREE.MathUtils.lerp(uniforms.u_mouse_speed.value, mouse.speed, 0.1);
+      uniforms.u_mouse_speed.value = THREE.MathUtils.lerp(uniforms.u_mouse_speed.value, mouse.speed, 0.25);
 
       renderer.render(scene, camera);
     };
@@ -355,6 +406,10 @@ export const LiquidBackgroundCanvas: React.FC<LiquidBackgroundCanvasProps> = ({
     return () => {
       if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
       window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('mouseleave', handlePointerLeave);
+      window.removeEventListener('resize', updateBounds);
+      window.removeEventListener('scroll', updateBounds);
       resizeObserver.disconnect();
       renderer.dispose();
       material.dispose();

@@ -47,7 +47,7 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
               <div
                 key={dataset.id}
                 onClick={() => setSelectedDataset(dataset)}
-                className={`p-4 rounded-xl border cursor-pointer transition-all space-y-2 ${
+                className={`p-4 rounded-xl border cursor-pointer transition-all space-y-2 anime-tab-row ${
                   isSelected
                     ? 'bg-neutral-850 border-neutral-500 shadow-md'
                     : 'surface-solid text-neutral-300 hover:bg-neutral-850 surface-hover'
@@ -78,7 +78,7 @@ export const DatasetsView: React.FC<DatasetsViewProps> = ({
 
         {/* Right Column: Dataset Items Inspector */}
         {selectedDataset && (
-          <div className="lg:col-span-7 surface-solid rounded-xl border border-neutral-800 overflow-hidden font-mono text-xs">
+          <div className="lg:col-span-7 surface-solid rounded-xl border border-neutral-800 overflow-hidden font-mono text-xs anime-tab-card">
             <div className="glass-floating px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
               <div>
                 <span className="text-[10px] uppercase text-neutral-400 tracking-wider block">

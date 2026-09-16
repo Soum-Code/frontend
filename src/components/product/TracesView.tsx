@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Activity,
   ChevronDown,
   ChevronRight,
   ChevronLeft,
+  ChevronUp,
   Clock,
   Coins,
   Cpu,
@@ -16,6 +18,8 @@ import {
   Database,
   ShieldAlert,
   ArrowRight,
+  ArrowDown,
+  ArrowUpDown,
   PlusCircle,
   Copy,
   Check,
@@ -25,9 +29,13 @@ import {
   Filter,
   X,
   Keyboard,
-  CornerDownLeft
+  CornerDownLeft,
+  Radio,
+  Sparkles,
+  Zap
 } from 'lucide-react';
-import { Trace, Span, EvaluatorResult } from '../../types';
+import { Trace, Span, EvaluatorResult, ChronologicalSortOrder } from '../../types';
+import { parseDateTimeToMs } from '../../utils/dateUtils';
 
 interface TracesViewProps {
   traces: Trace[];
@@ -53,35 +61,58 @@ export const TracesView: React.FC<TracesViewProps> = ({
   const [viewPerspective, setViewPerspective] = useState<'tree' | 'timeline' | 'flame' | 'evidence'>('tree');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'error' | 'warning'>('all');
+  const [sortOrder, setSortOrder] = useState<ChronologicalSortOrder>('reverse-chronological');
+  const [copiedTraceId, setCopiedTraceId] = useState<string | null>(null);
   const [curatedSuccess, setCuratedSuccess] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
   const [isDetailsFlash, setIsDetailsFlash] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 8;
 
+  // Auto-scroll state for trace list stream
+  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+
+  // Expanded span IDs for hierarchical tree view
+  const [expandedSpanIds, setExpandedSpanIds] = useState<Set<string>>(new Set());
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const traceItemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const traceListContainerRef = useRef<HTMLDivElement>(null);
   const detailsRef = useRef<HTMLDivElement>(null);
+  const prevTraceIdRef = useRef<string | null>(null);
+  const prevTracesCountRef = useRef<number>(traces.length);
 
-  const filteredTraces = traces.filter(t => {
-    if (filterAgentId && t.agentId !== filterAgentId) return false;
-    if (statusFilter !== 'all' && t.status !== statusFilter) return false;
-    if (searchQuery.trim() === '') return true;
-    const q = searchQuery.toLowerCase().trim();
-    return (
-      t.id.toLowerCase().includes(q) ||
-      t.agentName.toLowerCase().includes(q) ||
-      t.agentId.toLowerCase().includes(q) ||
-      t.status.toLowerCase().includes(q) ||
-      t.inputPreview.toLowerCase().includes(q) ||
-      t.tags.some(tag => tag.toLowerCase().includes(q))
-    );
-  });
+  const filteredTraces = useMemo(() => {
+    const list = traces.filter(t => {
+      if (filterAgentId && t.agentId !== filterAgentId) return false;
+      if (statusFilter !== 'all' && t.status !== statusFilter) return false;
+      if (searchQuery.trim() === '') return true;
+      const q = searchQuery.toLowerCase().trim();
+      return (
+        t.id.toLowerCase().includes(q) ||
+        t.agentName.toLowerCase().includes(q) ||
+        t.agentId.toLowerCase().includes(q) ||
+        t.status.toLowerCase().includes(q) ||
+        t.inputPreview.toLowerCase().includes(q) ||
+        t.tags.some(tag => tag.toLowerCase().includes(q))
+      );
+    });
 
-  // Reset to page 1 whenever filters change
+    return list.slice().sort((a, b) => {
+      const timeA = parseDateTimeToMs(a.timestamp);
+      const timeB = parseDateTimeToMs(b.timestamp);
+      if (timeA !== timeB) {
+        return sortOrder === 'chronological' ? timeA - timeB : timeB - timeA;
+      }
+      return sortOrder === 'chronological' ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id);
+    });
+  }, [traces, filterAgentId, statusFilter, searchQuery, sortOrder]);
+
+  // Reset to page 1 whenever filters or sort order change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterAgentId, statusFilter, searchQuery]);
+  }, [filterAgentId, statusFilter, searchQuery, sortOrder]);
 
   const totalPages = Math.max(1, Math.ceil(filteredTraces.length / PAGE_SIZE));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
@@ -89,6 +120,86 @@ export const TracesView: React.FC<TracesViewProps> = ({
 
   const currentTrace = selectedTrace || paginatedTraces[0] || filteredTraces[0] || traces[0];
   const currentSpan = selectedSpan || currentTrace?.spans[0];
+
+  // Helper to find initial priority span (warning or error first)
+  const getFlaggedOrFirstSpan = (trace: Trace): Span | undefined => {
+    if (!trace.spans || trace.spans.length === 0) return undefined;
+    const errorSpan = trace.spans.find(
+      s => s.status === 'error' || s.evaluatorResults?.some(e => !e.passed)
+    );
+    if (errorSpan) return errorSpan;
+    const warningSpan = trace.spans.find(s => s.status === 'warning');
+    if (warningSpan) return warningSpan;
+    return trace.spans[0];
+  };
+
+  // Helper to find all warning or error spans in current trace
+  const flaggedSpans = currentTrace?.spans.filter(
+    s => s.status === 'error' || s.status === 'warning' || s.evaluatorResults?.some(e => !e.passed)
+  ) || [];
+
+  // Automatically expand and highlight any spans marked as 'warning' or 'error' immediately upon selecting a trace
+  useEffect(() => {
+    if (!currentTrace) return;
+
+    // Expand all spans by default, ensuring all parent chains of error/warning spans are expanded
+    const allSpanIds = new Set<string>();
+    currentTrace.spans.forEach(s => {
+      allSpanIds.add(s.id);
+      if (s.parentSpanId) allSpanIds.add(s.parentSpanId);
+    });
+    setExpandedSpanIds(allSpanIds);
+
+    // If switching to a new trace, auto-select the highest priority discrepancy span (error or warning) if present
+    if (prevTraceIdRef.current !== currentTrace.id) {
+      prevTraceIdRef.current = currentTrace.id;
+      const initialSpan = getFlaggedOrFirstSpan(currentTrace);
+      if (initialSpan && (!selectedSpan || selectedSpan.traceId !== currentTrace.id)) {
+        onSelectSpan(initialSpan);
+      }
+    }
+  }, [currentTrace?.id]);
+
+  // Auto-scroll listener to detect if user is at bottom of trace list
+  const handleTraceListScroll = () => {
+    if (!traceListContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = traceListContainerRef.current;
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+    const atBottom = distanceToBottom <= 36;
+
+    if (atBottom) {
+      setIsUserScrolledUp(false);
+      setIsAutoScrollEnabled(true);
+    } else {
+      setIsUserScrolledUp(true);
+      setIsAutoScrollEnabled(false);
+    }
+  };
+
+  // Auto-scroll to follow latest incoming log entries when enabled and traces update
+  useEffect(() => {
+    if (traces.length !== prevTracesCountRef.current) {
+      prevTracesCountRef.current = traces.length;
+      if (isAutoScrollEnabled && traceListContainerRef.current) {
+        traceListContainerRef.current.scrollTo({
+          top: traceListContainerRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+    }
+  }, [traces.length, isAutoScrollEnabled]);
+
+  // Scroll to bottom manually and re-enable auto-scroll
+  const scrollToBottomAndResumeAutoScroll = () => {
+    if (traceListContainerRef.current) {
+      traceListContainerRef.current.scrollTo({
+        top: traceListContainerRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+      setIsAutoScrollEnabled(true);
+      setIsUserScrolledUp(false);
+    }
+  };
 
   // Helper to scroll trace into view smoothly
   const scrollToTrace = (traceId: string) => {
@@ -105,9 +216,8 @@ export const TracesView: React.FC<TracesViewProps> = ({
       const nextSlice = filteredTraces.slice((targetPage - 1) * PAGE_SIZE, targetPage * PAGE_SIZE);
       if (nextSlice[0]) {
         onSelectTrace(nextSlice[0]);
-        if (nextSlice[0].spans && nextSlice[0].spans.length > 0) {
-          onSelectSpan(nextSlice[0].spans[0]);
-        }
+        const nextSpan = getFlaggedOrFirstSpan(nextSlice[0]);
+        if (nextSpan) onSelectSpan(nextSpan);
         scrollToTrace(nextSlice[0].id);
       }
     }
@@ -120,9 +230,8 @@ export const TracesView: React.FC<TracesViewProps> = ({
       const prevSlice = filteredTraces.slice((targetPage - 1) * PAGE_SIZE, targetPage * PAGE_SIZE);
       if (prevSlice[0]) {
         onSelectTrace(prevSlice[0]);
-        if (prevSlice[0].spans && prevSlice[0].spans.length > 0) {
-          onSelectSpan(prevSlice[0].spans[0]);
-        }
+        const prevSpan = getFlaggedOrFirstSpan(prevSlice[0]);
+        if (prevSpan) onSelectSpan(prevSpan);
         scrollToTrace(prevSlice[0].id);
       }
     }
@@ -133,6 +242,33 @@ export const TracesView: React.FC<TracesViewProps> = ({
       onCurateToDataset(currentSpan, currentTrace);
       setCuratedSuccess(true);
       setTimeout(() => setCuratedSuccess(false), 2500);
+    }
+  };
+
+  const handleToggleSpanExpand = (spanId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setExpandedSpanIds(prev => {
+      const next = new Set(prev);
+      if (next.has(spanId)) {
+        next.delete(spanId);
+      } else {
+        next.add(spanId);
+      }
+      return next;
+    });
+  };
+
+  const handleCycleFlaggedSpan = () => {
+    if (flaggedSpans.length === 0) return;
+    const currentIndex = flaggedSpans.findIndex(s => s.id === currentSpan?.id);
+    const nextIndex = (currentIndex + 1) % flaggedSpans.length;
+    const nextSpan = flaggedSpans[nextIndex];
+    if (nextSpan) {
+      onSelectSpan(nextSpan);
+      // Ensure its parent is expanded
+      if (nextSpan.parentSpanId) {
+        setExpandedSpanIds(prev => new Set([...prev, nextSpan.parentSpanId!]));
+      }
     }
   };
 
@@ -402,48 +538,44 @@ export const TracesView: React.FC<TracesViewProps> = ({
             )}
           </button>
 
-          {/* View Perspective Switcher */}
-          <div className="flex items-center space-x-1 bg-[#101116] border border-white/[0.08] p-1 rounded-lg">
-            <button
-              onClick={() => setViewPerspective('tree')}
-              title="Tree View (Press 1)"
-              className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                viewPerspective === 'tree' ? 'bg-white text-neutral-950 font-medium shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
-              }`}
-            >
-              <span>Tree View</span>
-              <kbd className={`text-[9px] px-1 rounded ${viewPerspective === 'tree' ? 'bg-black/10 text-neutral-800' : 'bg-white/[0.06] text-neutral-400'}`}>1</kbd>
-            </button>
-            <button
-              onClick={() => setViewPerspective('timeline')}
-              title="Timeline Lanes (Press 2)"
-              className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                viewPerspective === 'timeline' ? 'bg-white text-neutral-950 font-medium shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
-              }`}
-            >
-              <span>Timeline Lanes</span>
-              <kbd className={`text-[9px] px-1 rounded ${viewPerspective === 'timeline' ? 'bg-black/10 text-neutral-800' : 'bg-white/[0.06] text-neutral-400'}`}>2</kbd>
-            </button>
-            <button
-              onClick={() => setViewPerspective('flame')}
-              title="Flame Graph (Press 3)"
-              className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                viewPerspective === 'flame' ? 'bg-white text-neutral-950 font-medium shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
-              }`}
-            >
-              <span>Flame Graph</span>
-              <kbd className={`text-[9px] px-1 rounded ${viewPerspective === 'flame' ? 'bg-black/10 text-neutral-800' : 'bg-white/[0.06] text-neutral-400'}`}>3</kbd>
-            </button>
-            <button
-              onClick={() => setViewPerspective('evidence')}
-              title="Evaluators & Evidence (Press 4)"
-              className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                viewPerspective === 'evidence' ? 'bg-white text-neutral-950 font-medium shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
-              }`}
-            >
-              <span>Evaluators & Evidence</span>
-              <kbd className={`text-[9px] px-1 rounded ${viewPerspective === 'evidence' ? 'bg-black/10 text-neutral-800' : 'bg-white/[0.06] text-neutral-400'}`}>4</kbd>
-            </button>
+          {/* View Perspective Switcher with Sliding layoutId Pill */}
+          <div className="flex items-center space-x-1 bg-[#101116] border border-white/[0.08] p-1 rounded-xl relative">
+            {(
+              [
+                { id: 'tree', label: 'Tree View', key: '1' },
+                { id: 'timeline', label: 'Timeline Lanes', key: '2' },
+                { id: 'flame', label: 'Flame Graph', key: '3' },
+                { id: 'evidence', label: 'Evaluators & Evidence', key: '4' },
+              ] as const
+            ).map((p) => {
+              const active = viewPerspective === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setViewPerspective(p.id)}
+                  title={`${p.label} (Press ${p.key})`}
+                  className={`relative px-3 py-1.5 text-xs font-mono rounded-lg transition-colors flex items-center space-x-1.5 tactile-press z-10 ${
+                    active ? 'text-neutral-950 font-medium' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  {active && (
+                    <motion.div
+                      layoutId="activePerspectivePill"
+                      transition={{ type: 'spring', stiffness: 480, damping: 32 }}
+                      className="absolute inset-0 bg-white rounded-lg shadow-sm z-[-1]"
+                    />
+                  )}
+                  <span>{p.label}</span>
+                  <kbd
+                    className={`text-[9px] px-1 rounded keycap-bevel ${
+                      active ? 'bg-black/15 text-neutral-900 border-black/20' : 'bg-white/[0.06] text-neutral-400 border-white/10'
+                    }`}
+                  >
+                    {p.key}
+                  </kbd>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -456,30 +588,30 @@ export const TracesView: React.FC<TracesViewProps> = ({
             <span>Power Navigation:</span>
           </span>
           <span className="flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px]">J</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px]">J</kbd>
             <span className="text-neutral-500">/</span>
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px]">K</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px]">K</kbd>
             <span className="text-neutral-300 ml-1">next/prev trace</span>
           </span>
           <span className="flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px] flex items-center space-x-0.5">
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px] flex items-center space-x-0.5">
               <CornerDownLeft className="w-2.5 h-2.5" />
               <span>Enter</span>
             </kbd>
             <span className="text-neutral-300 ml-1">inspect details</span>
           </span>
           <span className="hidden sm:flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px]">1</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px]">1</kbd>
             <span className="text-neutral-500">-</span>
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px]">4</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px]">4</kbd>
             <span className="text-neutral-300 ml-1">perspectives</span>
           </span>
           <span className="hidden md:flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px]">C</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px]">C</kbd>
             <span className="text-neutral-300 ml-1">curate</span>
           </span>
           <span className="hidden lg:flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-white font-bold text-[10px]">/</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-white font-bold text-[10px]">/</kbd>
             <span className="text-neutral-300 ml-1">search</span>
           </span>
         </div>
@@ -487,16 +619,16 @@ export const TracesView: React.FC<TracesViewProps> = ({
         {onOpenShortcutsModal && (
           <button
             onClick={onOpenShortcutsModal}
-            className="text-neutral-400 hover:text-white flex items-center space-x-1.5 ml-auto transition-colors group"
+            className="text-neutral-400 hover:text-white flex items-center space-x-1.5 ml-auto transition-colors group tactile-press"
           >
             <span className="group-hover:underline decoration-white/30">All shortcuts</span>
-            <kbd className="px-1.5 py-0.5 rounded bg-black/80 border border-white/20 text-neutral-300 text-[10px] font-bold">?</kbd>
+            <kbd className="px-1.5 py-0.5 rounded keycap-bevel text-neutral-300 text-[10px] font-bold">?</kbd>
           </button>
         )}
       </div>
 
       {/* Dedicated Text-Based Filter Bar */}
-      <div className="glass-morphism-v2 rounded-xl p-3 sm:p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-sm border border-white/[0.12]">
+      <div className="glass-morphism-v2 rounded-xl p-3 sm:p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-sm border border-white/[0.12] anime-tab-card">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
           <input
@@ -520,50 +652,63 @@ export const TracesView: React.FC<TracesViewProps> = ({
 
         {/* Status Filter Chips & Result Counter */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <div className="flex items-center space-x-1 bg-[#08090b] border border-[#191b22] p-1 rounded-lg">
-            <button
-              onClick={() => setStatusFilter('all')}
-              className={`px-2.5 py-1 text-xs font-mono rounded-md transition-colors ${
-                statusFilter === 'all'
-                  ? 'bg-white text-neutral-950 font-semibold shadow-sm'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-white/[0.04]'
-              }`}
-            >
-              All ({traces.length})
-            </button>
-            <button
-              onClick={() => setStatusFilter('success')}
-              className={`px-2.5 py-1 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                statusFilter === 'success'
-                  ? 'bg-neutral-200 text-neutral-950 font-semibold shadow-sm'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-white/[0.04]'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-neutral-300" />
-              <span>Success</span>
-            </button>
-            <button
-              onClick={() => setStatusFilter('warning')}
-              className={`px-2.5 py-1 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                statusFilter === 'warning'
-                  ? 'bg-amber-400 text-neutral-950 font-semibold shadow-sm'
-                  : 'text-neutral-400 hover:text-amber-400/90 hover:bg-white/[0.04]'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-              <span>Warning</span>
-            </button>
-            <button
-              onClick={() => setStatusFilter('error')}
-              className={`px-2.5 py-1 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 ${
-                statusFilter === 'error'
-                  ? 'bg-rose-500 text-white font-semibold shadow-sm'
-                  : 'text-neutral-400 hover:text-rose-400 hover:bg-white/[0.04]'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-              <span>Error</span>
-            </button>
+          <div className="flex items-center space-x-1 bg-[#08090b] border border-[#191b22] p-1 rounded-lg relative">
+            {(
+              [
+                { id: 'all', label: `All (${traces.length})` },
+                { id: 'success', label: 'Success', dotClass: 'bg-emerald-400 phosphor-emerald' },
+                { id: 'warning', label: 'Warning', dotClass: 'bg-amber-400 phosphor-amber' },
+                { id: 'error', label: 'Error', dotClass: 'bg-rose-400 phosphor-rose' },
+              ] as const
+            ).map((opt) => {
+              const active = statusFilter === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => setStatusFilter(opt.id)}
+                  className={`relative px-2.5 py-1 text-xs font-mono rounded-md transition-colors flex items-center space-x-1.5 tactile-press z-10 ${
+                    active ? 'text-neutral-950 font-semibold' : 'text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  {active && (
+                    <motion.div
+                      layoutId="activeStatusFilterPill"
+                      transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+                      className="absolute inset-0 bg-white rounded-md shadow-sm z-[-1]"
+                    />
+                  )}
+                  {'dotClass' in opt && (
+                    <span className={`w-1.5 h-1.5 rounded-full ${opt.dotClass}`} />
+                  )}
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Sort by Dropdown */}
+          <div className="flex items-center space-x-2 bg-[#08090b] border border-[#191b22] px-2.5 py-1.5 rounded-lg shadow-sm hover:border-white/20 transition-colors">
+            <ArrowUpDown className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+            <label htmlFor="traces-sort-by-select" className="text-[11px] font-mono text-neutral-400 whitespace-nowrap">
+              Sort by:
+            </label>
+            <div className="relative flex items-center">
+              <select
+                id="traces-sort-by-select"
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as ChronologicalSortOrder)}
+                className="bg-transparent text-xs font-mono text-neutral-200 focus:outline-none cursor-pointer pr-5 py-0.5 appearance-none"
+                aria-label="Sort traces chronologically"
+              >
+                <option value="reverse-chronological" className="bg-[#0b0d13] text-white">
+                  Reverse-chronological (Newest first)
+                </option>
+                <option value="chronological" className="bg-[#0b0d13] text-white">
+                  Chronological (Oldest first)
+                </option>
+              </select>
+              <ChevronDown className="w-3 h-3 text-neutral-400 absolute right-0 pointer-events-none" />
+            </div>
           </div>
 
           <div className="text-[11px] font-mono text-neutral-400 px-2 py-1 bg-[#08090b] border border-[#191b22] rounded-lg">
@@ -574,7 +719,7 @@ export const TracesView: React.FC<TracesViewProps> = ({
 
       {/* Main 2-Column Split: Trace List (Left) + Selected Trace Investigation View (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Trace List */}
+        {/* Left Column: Trace List with Real-Time Auto-Scroll Stream */}
         <div className="lg:col-span-4 space-y-3">
           <div className="flex items-center space-x-2">
             <div className="relative flex-1">
@@ -597,76 +742,202 @@ export const TracesView: React.FC<TracesViewProps> = ({
             </button>
           </div>
 
-          <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1 scrollbar-thin">
-            {paginatedTraces.length === 0 ? (
-              <div className="p-8 text-center border border-dashed border-white/10 rounded-xl font-mono text-xs text-neutral-500">
-                No matching traces found on this page.
-              </div>
-            ) : (
-              paginatedTraces.map((trace) => {
-                const isSelected = currentTrace?.id === trace.id;
+          {/* Trace Stream Auto-Scroll Control Bar */}
+          <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-[#0c0d12] border border-white/[0.06] text-xs font-mono">
+            <div className="flex items-center space-x-2">
+              <span className="text-neutral-500 text-[10px] uppercase font-semibold">Stream Follow:</span>
+              <button
+                onClick={() => {
+                  if (!isAutoScrollEnabled) {
+                    scrollToBottomAndResumeAutoScroll();
+                  } else {
+                    setIsAutoScrollEnabled(false);
+                  }
+                }}
+                className={`flex items-center space-x-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                  isAutoScrollEnabled
+                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-white/[0.04] text-neutral-400 border border-white/[0.08] hover:text-neutral-200'
+                }`}
+                title={isAutoScrollEnabled ? 'Auto-scroll is actively following latest traces' : 'Click to enable auto-scroll stream follow'}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${isAutoScrollEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`} />
+                <span>{isAutoScrollEnabled ? 'Auto-Scroll ON' : 'Auto-Scroll Paused'}</span>
+              </button>
+            </div>
 
-                return (
-                  <div
-                    key={trace.id}
-                    ref={(el) => {
-                      if (el) {
-                        traceItemRefs.current.set(trace.id, el);
-                      } else {
-                        traceItemRefs.current.delete(trace.id);
-                      }
-                    }}
-                    onClick={() => {
-                      onSelectTrace(trace);
-                      if (trace.spans.length > 0) {
-                        onSelectSpan(trace.spans[0]);
-                      }
-                    }}
-                    className={`p-3.5 rounded-xl border cursor-pointer transition-all duration-250 ease-out relative overflow-hidden ${
-                      isSelected
-                        ? 'glass-morphism-v2 border-glow-subtle border-white/40 shadow-md ring-1 ring-white/10 text-white'
-                        : 'ios-liquid-row border-white/[0.08] text-neutral-300'
-                    }`}
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setSortOrder(prev => prev === 'reverse-chronological' ? 'chronological' : 'reverse-chronological')}
+                title={`Sort order: ${sortOrder}. Click to toggle.`}
+                className="text-[10px] text-neutral-400 hover:text-neutral-200 flex items-center space-x-1 px-1.5 py-0.5 rounded bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] transition-colors"
+              >
+                <ArrowUpDown className="w-2.5 h-2.5 text-neutral-400" />
+                <span>{sortOrder === 'reverse-chronological' ? 'Newest First' : 'Oldest First'}</span>
+              </button>
+              <span className="text-[10px] text-neutral-500">
+                {filteredTraces.length} logs
+              </span>
+            </div>
+          </div>
+
+          {/* Trace List Scrollable Container */}
+          <div className="relative">
+            <div
+              ref={traceListContainerRef}
+              onScroll={handleTraceListScroll}
+              className="space-y-2 max-h-[580px] overflow-y-auto pr-1 scrollbar-thin scroll-smooth"
+            >
+              <AnimatePresence initial={false} mode="popLayout">
+                {paginatedTraces.length === 0 ? (
+                  <motion.div
+                    key="empty"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="p-8 text-center border border-dashed border-white/10 rounded-xl font-mono text-xs text-neutral-500"
                   >
-                    {isSelected && (
-                      <div className="absolute inset-x-0 top-0 h-[1.5px] apple-liquid-specular pointer-events-none" />
-                    )}
-                    <div className="flex items-center justify-between text-xs font-mono mb-1">
-                      <span className="font-bold text-white flex items-center space-x-1.5">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            trace.status === 'error'
-                              ? 'bg-rose-400 animate-pulse'
-                              : trace.status === 'warning'
-                              ? 'bg-amber-400'
-                              : 'bg-neutral-300'
-                          }`}
-                        />
-                        <span>{trace.id}</span>
-                      </span>
-                      <div className="flex items-center space-x-1.5">
+                    No matching traces found on this page.
+                  </motion.div>
+                ) : (
+                  paginatedTraces.map((trace) => {
+                    const isSelected = currentTrace?.id === trace.id;
+                    const hasDiscrepancy = trace.status === 'error' || trace.status === 'warning';
+
+                    return (
+                      <motion.div
+                        key={trace.id}
+                        layout="position"
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.96 }}
+                        transition={{
+                          layout: {
+                            type: 'spring',
+                            stiffness: 380,
+                            damping: 30,
+                            mass: 0.8
+                          },
+                          opacity: { duration: 0.2 },
+                          y: { duration: 0.25 }
+                        }}
+                        ref={(el) => {
+                          if (el) {
+                            traceItemRefs.current.set(trace.id, el as HTMLDivElement);
+                          } else {
+                            traceItemRefs.current.delete(trace.id);
+                          }
+                        }}
+                        onClick={() => {
+                          onSelectTrace(trace);
+                          const targetSpan = getFlaggedOrFirstSpan(trace);
+                          if (targetSpan) {
+                            onSelectSpan(targetSpan);
+                          }
+                        }}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-colors duration-200 relative overflow-hidden ${
+                          isSelected
+                            ? 'glass-morphism-v2 border-glow-subtle border-white/40 shadow-md ring-1 ring-white/10 text-white'
+                            : hasDiscrepancy
+                            ? trace.status === 'error'
+                              ? 'bg-rose-950/20 border-rose-900/40 text-neutral-200 hover:border-rose-700/60 hover:bg-rose-950/30'
+                              : 'bg-amber-950/20 border-amber-900/40 text-neutral-200 hover:border-amber-700/60 hover:bg-amber-950/30'
+                            : 'ios-liquid-row border-white/[0.08] text-neutral-300 hover:border-white/20'
+                        }`}
+                      >
                         {isSelected && (
-                          <span className="text-[9px] text-white/90 bg-white/10 px-1.5 py-0.5 rounded border border-white/20 font-bold flex items-center space-x-0.5">
-                            <CornerDownLeft className="w-2.5 h-2.5" />
-                            <span>Active</span>
-                          </span>
+                          <div className="absolute inset-x-0 top-0 h-[1.5px] apple-liquid-specular pointer-events-none" />
                         )}
-                        <span className="text-neutral-500">{trace.timestamp.split(' ')[1]}</span>
-                      </div>
-                    </div>
+                        <div className="flex items-center justify-between text-xs font-mono mb-1">
+                          <span className="font-bold text-white flex items-center space-x-1.5">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                trace.status === 'error'
+                                  ? 'bg-rose-400 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.8)]'
+                                  : trace.status === 'warning'
+                                  ? 'bg-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.6)]'
+                                  : 'bg-neutral-300'
+                              }`}
+                            />
+                            <span>{trace.id}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(trace.id);
+                                setCopiedTraceId(trace.id);
+                                setTimeout(() => setCopiedTraceId(prev => (prev === trace.id ? null : prev)), 2000);
+                              }}
+                              className={`px-1 py-0.2 rounded text-[9px] font-mono flex items-center space-x-0.5 transition-all border shrink-0 ${
+                                copiedTraceId === trace.id
+                                  ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300'
+                                  : 'bg-white/[0.06] border-white/[0.12] text-neutral-400 hover:text-white hover:bg-white/[0.14]'
+                              }`}
+                              title="Copy Trace ID"
+                              aria-label={`Copy Trace ID ${trace.id}`}
+                            >
+                              {copiedTraceId === trace.id ? (
+                                <>
+                                  <Check className="w-2.5 h-2.5 text-emerald-300" />
+                                  <span className="text-[8px] text-emerald-300">Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-2.5 h-2.5" />
+                                  <span className="text-[8px]">Copy</span>
+                                </>
+                              )}
+                            </button>
+                          </span>
+                          <div className="flex items-center space-x-1.5">
+                            {hasDiscrepancy && (
+                              <span
+                                className={`text-[9px] px-1.5 py-0.2 rounded border font-semibold uppercase ${
+                                  trace.status === 'error'
+                                    ? 'bg-rose-950/80 border-rose-800 text-rose-300'
+                                    : 'bg-amber-950/80 border-amber-800 text-amber-300'
+                                }`}
+                              >
+                                {trace.status}
+                              </span>
+                            )}
+                            {isSelected && (
+                              <span className="text-[9px] text-white/90 bg-white/10 px-1.5 py-0.5 rounded border border-white/20 font-bold flex items-center space-x-0.5">
+                                <CornerDownLeft className="w-2.5 h-2.5" />
+                                <span>Active</span>
+                              </span>
+                            )}
+                            <span className="text-neutral-500">{trace.timestamp.split(' ')[1]}</span>
+                          </div>
+                        </div>
 
-                    <div className="text-xs text-neutral-300 line-clamp-2 font-mono my-1.5">
-                      {trace.inputPreview}
-                    </div>
+                        <div className="text-xs text-neutral-300 line-clamp-2 font-mono my-1.5">
+                          {trace.inputPreview}
+                        </div>
 
-                    <div className="flex items-center justify-between text-[11px] font-mono text-neutral-400 pt-2 border-t border-white/[0.06]">
-                      <span className="truncate max-w-[120px] text-neutral-300">{trace.agentName.split(' ')[0]}</span>
-                      <span>{trace.durationMs}ms</span>
-                      <span>{trace.totalTokens}t</span>
-                    </div>
-                  </div>
-                );
-              })
+                        <div className="flex items-center justify-between text-[11px] font-mono text-neutral-400 pt-2 border-t border-white/[0.06]">
+                          <span className="truncate max-w-[120px] text-neutral-300">{trace.agentName.split(' ')[0]}</span>
+                          <span>{trace.durationMs}ms</span>
+                          <span>{trace.totalTokens}t</span>
+                        </div>
+                      </motion.div>
+                    );
+                  })
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Floating Auto-Scroll Resume Button when scrolled up */}
+            {isUserScrolledUp && (
+              <div className="absolute bottom-3 inset-x-0 flex justify-center pointer-events-none z-10">
+                <button
+                  onClick={scrollToBottomAndResumeAutoScroll}
+                  className="pointer-events-auto px-3 py-1.5 rounded-full bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-xs font-mono font-medium shadow-lg hover:bg-emerald-900/90 hover:border-emerald-400 transition-all flex items-center space-x-1.5 backdrop-blur-md animate-bounce"
+                >
+                  <ArrowDown className="w-3.5 h-3.5" />
+                  <span>Resume Auto-Scroll</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                </button>
+              </div>
             )}
           </div>
 
@@ -712,7 +983,7 @@ export const TracesView: React.FC<TracesViewProps> = ({
         {currentTrace && (
           <div
             ref={detailsRef}
-            className={`lg:col-span-8 space-y-6 transition-all duration-300 rounded-2xl ${
+            className={`lg:col-span-8 space-y-6 transition-all duration-300 rounded-2xl anime-tab-card ${
               isDetailsFlash ? 'ring-1 ring-white/30 shadow-[0_0_30px_rgba(255,255,255,0.06)]' : ''
             }`}
           >
@@ -764,12 +1035,40 @@ export const TracesView: React.FC<TracesViewProps> = ({
               <div className="absolute inset-x-0 top-0 h-[1.5px] apple-liquid-specular pointer-events-none" />
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-white/[0.08] gap-3">
                 <div>
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400">
-                    SELECTED TRACE · {currentTrace.sessionId}
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 flex items-center space-x-2">
+                    <span>SELECTED TRACE · {currentTrace.sessionId}</span>
                   </div>
-                  <h3 className="text-sm font-semibold text-white font-mono mt-0.5">
-                    {currentTrace.id} &nbsp;·&nbsp; {currentTrace.agentName}
-                  </h3>
+                  <div className="flex items-center space-x-2 mt-0.5">
+                    <h3 className="text-sm font-semibold text-white font-mono">
+                      {currentTrace.id} &nbsp;·&nbsp; {currentTrace.agentName}
+                    </h3>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(currentTrace.id);
+                        setCopiedTraceId(currentTrace.id);
+                        setTimeout(() => setCopiedTraceId(prev => (prev === currentTrace.id ? null : prev)), 2000);
+                      }}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center space-x-1 transition-all border shrink-0 ${
+                        copiedTraceId === currentTrace.id
+                          ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300'
+                          : 'bg-white/[0.06] border-white/[0.12] text-neutral-300 hover:text-white hover:bg-white/[0.14]'
+                      }`}
+                      title="Copy Trace ID"
+                      aria-label={`Copy Trace ID ${currentTrace.id}`}
+                    >
+                      {copiedTraceId === currentTrace.id ? (
+                        <>
+                          <Check className="w-2.5 h-2.5 text-emerald-300" />
+                          <span className="text-[9px] text-emerald-300">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-2.5 h-2.5" />
+                          <span className="text-[9px]">Copy ID</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {/* 1-Click Curate into Dataset (Langfuse Loop) */}
@@ -831,44 +1130,158 @@ export const TracesView: React.FC<TracesViewProps> = ({
 
             {/* PERSPECTIVE VIEW: TREE */}
             {viewPerspective === 'tree' && (
-              <div className="glass-morphism-v2 border-glow-subtle rounded-xl border border-white/[0.12] p-4 space-y-2 relative overflow-hidden">
+              <div className="glass-morphism-v2 border-glow-subtle rounded-xl border border-white/[0.12] p-4 space-y-3 relative overflow-hidden">
                 <div className="absolute inset-x-0 top-0 h-[1.5px] apple-liquid-specular pointer-events-none" />
-                <div className="text-xs font-mono text-neutral-400 uppercase tracking-wider pb-2 border-b border-white/[0.08]">
-                  Execution Tree Spans ({currentTrace.spans.length})
+                
+                {/* Tree View Header with Actions */}
+                <div className="flex items-center justify-between pb-2 border-b border-white/[0.08] text-xs font-mono">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-neutral-400 uppercase tracking-wider">
+                      Execution Tree Spans ({currentTrace.spans.length})
+                    </span>
+                    {flaggedSpans.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-950 text-rose-300 border border-rose-800 flex items-center space-x-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping" />
+                        <span>{flaggedSpans.length} Flagged</span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    {flaggedSpans.length > 0 && (
+                      <button
+                        onClick={handleCycleFlaggedSpan}
+                        className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-[11px] font-medium transition-colors flex items-center space-x-1"
+                        title="Jump to next flagged span in this trace"
+                      >
+                        <ShieldAlert className="w-3 h-3" />
+                        <span>Next Discrepancy</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        const allIds = new Set(currentTrace.spans.map(s => s.id));
+                        setExpandedSpanIds(allIds);
+                      }}
+                      className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white border border-white/[0.08] text-[10px] transition-colors"
+                    >
+                      Expand All
+                    </button>
+                    <button
+                      onClick={() => {
+                        // Collapse all except error/warning spans and their parents
+                        const essential = new Set<string>();
+                        flaggedSpans.forEach(s => {
+                          essential.add(s.id);
+                          if (s.parentSpanId) essential.add(s.parentSpanId);
+                        });
+                        setExpandedSpanIds(essential);
+                      }}
+                      className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white border border-white/[0.08] text-[10px] transition-colors"
+                    >
+                      Collapse Non-Discrepancies
+                    </button>
+                  </div>
                 </div>
 
-                <div className="space-y-1.5 pt-2">
+                {/* Discrepancy Alert Banner when spans are flagged */}
+                {flaggedSpans.length > 0 && (
+                  <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-900/60 text-xs font-mono text-rose-200 flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>
+                        <strong className="text-white">Auto-Expanded:</strong> {flaggedSpans.length} span(s) marked as warning/error immediately prioritized for root-cause isolation.
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleCycleFlaggedSpan}
+                      className="text-[11px] underline hover:text-white shrink-0 ml-2 font-semibold"
+                    >
+                      Inspect First Flagged &rarr;
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-1.5 pt-1">
                   {currentTrace.spans.map((span) => {
                     const isSelected = currentSpan?.id === span.id;
                     const isChild = !!span.parentSpanId;
+                    const isFlaggedError = span.status === 'error' || span.evaluatorResults?.some(e => !e.passed);
+                    const isFlaggedWarning = span.status === 'warning' && !isFlaggedError;
+                    const hasChildren = currentTrace.spans.some(s => s.parentSpanId === span.id);
+                    const isExpanded = expandedSpanIds.has(span.id);
+
+                    // If parent is not expanded, hide child unless it is a flagged span
+                    if (isChild && span.parentSpanId && !expandedSpanIds.has(span.parentSpanId) && !isFlaggedError && !isFlaggedWarning) {
+                      return null;
+                    }
 
                     return (
                       <div
                         key={span.id}
                         onClick={() => onSelectSpan(span)}
-                        className={`p-3 rounded-lg border cursor-pointer transition-all duration-250 ease-out group ${
+                        className={`p-3 rounded-lg border cursor-pointer transition-all duration-250 ease-out group relative overflow-hidden ${
                           isChild ? 'ml-6' : ''
                         } ${
                           isSelected
-                            ? 'bg-[#1a1b24] border-white/50 text-white font-medium shadow-sm ring-1 ring-white/15'
+                            ? isFlaggedError
+                              ? 'bg-rose-950/60 border-rose-500 text-white font-medium shadow-[0_0_20px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50'
+                              : isFlaggedWarning
+                              ? 'bg-amber-950/60 border-amber-500 text-white font-medium shadow-[0_0_20px_rgba(245,158,11,0.35)] ring-1 ring-amber-500/50'
+                              : 'bg-[#1a1b24] border-white/50 text-white font-medium shadow-sm ring-1 ring-white/15'
+                            : isFlaggedError
+                            ? 'bg-rose-950/30 border-rose-800/80 text-rose-100 hover:bg-rose-950/50 hover:border-rose-600 shadow-[0_0_12px_rgba(244,63,94,0.2)]'
+                            : isFlaggedWarning
+                            ? 'bg-amber-950/30 border-amber-800/80 text-amber-100 hover:bg-amber-950/50 hover:border-amber-600 shadow-[0_0_12px_rgba(245,158,11,0.2)]'
                             : 'bg-[#111218]/90 border-white/[0.07] text-neutral-300 hover:bg-white/[0.07] hover:border-white/35 hover:text-white hover:shadow-[0_0_20px_rgba(255,255,255,0.04)]'
                         }`}
                       >
+                        {isSelected && (
+                          <div className="absolute inset-x-0 top-0 h-[1.5px] apple-liquid-specular pointer-events-none" />
+                        )}
                         <div className="flex items-center justify-between text-xs font-mono">
                           <div className="flex items-center space-x-2">
+                            {hasChildren && (
+                              <button
+                                onClick={(e) => handleToggleSpanExpand(span.id, e)}
+                                className="p-0.5 rounded hover:bg-white/10 text-neutral-400 hover:text-white transition-colors"
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                ) : (
+                                  <ChevronRight className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            )}
+
                             <span
-                              className={`w-2 h-2 rounded-full transition-transform duration-250 group-hover:scale-125 ${
-                                span.status === 'error'
-                                  ? 'bg-rose-400 shadow-[0_0_6px_rgba(244,63,94,0.6)]'
-                                  : span.status === 'warning'
-                                  ? 'bg-amber-400 shadow-[0_0_6px_rgba(245,158,11,0.6)]'
+                              className={`w-2.5 h-2.5 rounded-full transition-transform duration-250 group-hover:scale-125 ${
+                                isFlaggedError
+                                  ? 'bg-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.9)] animate-pulse'
+                                  : isFlaggedWarning
+                                  ? 'bg-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.9)]'
                                   : 'bg-neutral-300'
                               }`}
                             />
                             <span className="font-semibold transition-colors duration-250">{span.name}</span>
+                            
                             <span className="text-[10px] text-neutral-400 bg-black/40 px-1.5 py-0.5 rounded border border-white/[0.08] uppercase group-hover:border-white/25 group-hover:text-neutral-200 transition-all duration-250">
                               {span.type}
                             </span>
+
+                            {/* Prominent Discrepancy Badges */}
+                            {isFlaggedError && (
+                              <span className="text-[9px] px-2 py-0.5 rounded font-bold uppercase bg-rose-950 border border-rose-700 text-rose-300 shadow-sm flex items-center space-x-1">
+                                <ShieldAlert className="w-3 h-3" />
+                                <span>ERROR DISCREPANCY</span>
+                              </span>
+                            )}
+                            {isFlaggedWarning && (
+                              <span className="text-[9px] px-2 py-0.5 rounded font-bold uppercase bg-amber-950 border border-amber-700 text-amber-300 shadow-sm flex items-center space-x-1">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span>WARNING</span>
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex items-center space-x-4 text-neutral-400 group-hover:text-neutral-200 transition-colors duration-250">

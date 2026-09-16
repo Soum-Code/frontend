@@ -1,0 +1,35 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "Project": {
+      "collection": "projects",
+      "fields": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "environment": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "AgentSpan": {
+      "collection": "projects/{projectId}/spans",
+      "fields": {
+        "projectId": { "type": "string" },
+        "agentNamespace": { "type": "string" },
+        "action": { "type": "string" },
+        "status": { "type": "string" },
+        "contradictionScore": { "type": "number" },
+        "latencyMs": { "type": "number" },
+        "timestamp": { "type": "string" }
+      }
+    }
+  }
+}
