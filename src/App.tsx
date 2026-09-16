@@ -49,6 +49,7 @@ import { AuthModal } from './components/product/AuthModal';
 import { ProjectSelectorModal } from './components/product/ProjectSelectorModal';
 import { AnimeTabTransitionContainer } from './components/product/AnimeTabTransitionContainer';
 import { initLiquidCardSpringListener, triggerCardEntranceAnimation } from './utils/liquidHoverAnime';
+import { initChalkMoteProximityListener } from './utils/chalkMoteProximity';
 
 export default function App() {
   // Mode state: 'public' (editorial, spatial) vs 'product' (calm, precise, investigative)
@@ -292,9 +293,14 @@ export default function App() {
   }, [isShortcutsHelpOpen, isCommandPaletteOpen]);
 
   // Anime.js spring physics hover listener for all .ios-liquid-card-interactive elements
+  // and mouse-proximity dust-mote dispersion for .chalk-tactile-card elements
   useEffect(() => {
-    const cleanup = initLiquidCardSpringListener();
-    return cleanup;
+    const cleanupLiquid = initLiquidCardSpringListener();
+    const cleanupChalkMotes = initChalkMoteProximityListener();
+    return () => {
+      cleanupLiquid();
+      cleanupChalkMotes();
+    };
   }, []);
 
   // Trigger sequential Anime.js card entrance cascade on tab/view switch

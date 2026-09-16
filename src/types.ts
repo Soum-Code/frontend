@@ -1,5 +1,18 @@
 export type DesignMode = 'public' | 'product';
 export type ColorPalette = 'butter' | 'dark' | 'chalk';
+export type ChalkSurfacePreset = 'classic-white' | 'sepia-slate' | 'emerald-graphite' | 'custom';
+
+export interface ChalkSurfaceConfig {
+  id: ChalkSurfacePreset;
+  name: string;
+  subtitle: string;
+  hex: string;
+  cardBg: string;
+  borderColor: string;
+  textColor: string;
+  moteColor: string;
+}
+
 export type TextDensity = 'compact' | 'comfortable';
 export type ChronologicalSortOrder = 'reverse-chronological' | 'chronological';
 
